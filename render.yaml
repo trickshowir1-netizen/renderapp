@@ -1,14 +1,12 @@
 services:
   - type: web
     name: rvg-gateway
-    runtime: python
+    runtime: image
     repo: https://github.com/YOUR_USERNAME/YOUR_REPO_NAME
     plan: free
-    region: frankfurt  # می‌توانی به singapore یا ohio هم تغییر دهی
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    dockerCommand: pip install --upgrade pip setuptools wheel && pip install -r requirements.txt && python main.py
     envVars:
       - key: RENDER_PUBLIC_DOMAIN
-        value: your-app-name.onrender.com  # این رو بعد از استقرار عوض کن
+        value: rvg-gateway.onrender.com
       - key: SECRET_KEY
         generateValue: true
