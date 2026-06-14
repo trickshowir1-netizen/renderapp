@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict
 import uuid
 import json
 import os
@@ -13,8 +13,7 @@ from io import BytesIO
 
 app = FastAPI()
 
-# ========== تنظیمات امنیتی ==========
-# پنل مدیریت در مسیر رندوم قرار میگیره
+# ========== تنظیمات ==========
 ADMIN_PATH = os.getenv("ADMIN_PATH", secrets.token_urlsafe(8))
 PORT = int(os.getenv("PORT", 8000))
 RENDER_PUBLIC_DOMAIN = os.getenv("RENDER_PUBLIC_DOMAIN", "localhost")
@@ -23,7 +22,7 @@ PUBLIC_DOMAIN = RENDER_PUBLIC_DOMAIN
 # ========== ذخیره‌سازی ==========
 class LinkManager:
     def __init__(self):
-        self.links = {}
+        self.links: Dict = {}
         
 link_manager = LinkManager()
 
@@ -32,8 +31,6 @@ class CreateLinkRequest(BaseModel):
     traffic_limit_mb: Optional[float] = None
 
 def generate_vless_link(uuid_str: str, domain: str, name: str) -> str:
-    """تولید لینک VLESS استاندارد که تو همه کلاینت‌ها کار کنه"""
-    # فرمت ساده و استاندارد VLESS
     return f"vless://{uuid_str}@{domain}:443?encryption=none&security=tls&sni={domain}&fp=chrome&type=ws&host={domain}&path=%2Fvless#{name.replace(' ', '%20')}"
 
 # لینک پیش‌فرض
@@ -49,6 +46,21 @@ default_link = {
 }
 link_manager.links["default"] = default_link
 
+# ========== WebSocket Endpoint ==========
+@app.websocket("/vless")
+async def websocket_vless_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    print("✅ WebSocket client connected")
+    try:
+        while True:
+            data = await websocket.receive_text()
+            print(f"Received: {data}")
+            await websocket.send_text(f"Echo: {data}")
+    except WebSocketDisconnect:
+        print("❌ WebSocket client disconnected")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+
 # ========== API عمومی ==========
 @app.get("/")
 async def root():
@@ -58,11 +70,7 @@ async def root():
 async def health():
     return JSONResponse({"status": "ok", "domain": PUBLIC_DOMAIN})
 
-@app.get("/vless")
-async def vless_endpoint():
-    return JSONResponse({"status": "ready", "message": "WebSocket endpoint"})
-
-# ========== API پنل مدیریت (مسیر رندوم) ==========
+# ========== پنل مدیریت ==========
 @app.get(f"/{ADMIN_PATH}", response_class=HTMLResponse)
 async def dashboard(request: Request):
     default_link_url = generate_vless_link(default_uuid, PUBLIC_DOMAIN, "Default")
@@ -153,18 +161,8 @@ async def dashboard(request: Request):
             margin: 5px;
         }}
         .btn-copy {{ background: #28a745; }}
-        .create-form {{
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-        }}
-        .create-form input {{
-            flex: 1;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-        }}
+        .create-form {{ display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }}
+        .create-form input {{ flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }}
         .link-item {{
             background: #f9f9f9;
             border-radius: 10px;
@@ -226,7 +224,7 @@ async def dashboard(request: Request):
             <h2>➕ ساخت کانفیگ جدید</h2>
             <div class="create-form">
                 <input type="text" id="linkName" placeholder="نام (مثال: دوست, همکار)">
-                <input type="number" id="trafficLimit" placeholder="محدودیت ترافیک MB (اختیاری)">
+                <input type="number" id="trafficLimit" placeholder="محدودیت ترافیک MB">
                 <button onclick="createLink()">ساخت</button>
             </div>
             
@@ -249,7 +247,7 @@ async def dashboard(request: Request):
         </div>
 
         <div class="note">
-            ⚠️ اطلاعات به صورت موقت ذخیره می‌شوند. با هر بار ری‌استارت ریست می‌شوند.<br>
+            ⚠️ اطلاعات به صورت موقت ذخیره می‌شوند.<br>
             🌐 دامنه: {PUBLIC_DOMAIN}
         </div>
     </div>
