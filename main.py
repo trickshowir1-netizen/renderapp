@@ -7,12 +7,15 @@ import json
 import os
 import time
 import base64
+import secrets
 import qrcode
 from io import BytesIO
 
-app = FastAPI(title="RVG Gateway - Render Version")
+app = FastAPI()
 
-# ========== تنظیمات ==========
+# ========== تنظیمات امنیتی ==========
+# پنل مدیریت در مسیر رندوم قرار میگیره
+ADMIN_PATH = os.getenv("ADMIN_PATH", secrets.token_urlsafe(8))
 PORT = int(os.getenv("PORT", 8000))
 RENDER_PUBLIC_DOMAIN = os.getenv("RENDER_PUBLIC_DOMAIN", "localhost")
 PUBLIC_DOMAIN = RENDER_PUBLIC_DOMAIN
@@ -29,34 +32,15 @@ class CreateLinkRequest(BaseModel):
     traffic_limit_mb: Optional[float] = None
 
 def generate_vless_link(uuid_str: str, domain: str, name: str) -> str:
-    """تولید لینک VLESS استاندارد"""
-    config = {
-        "v": "2",
-        "ps": name,
-        "add": domain,
-        "port": "443",
-        "id": uuid_str,
-        "aid": "0",
-        "scy": "auto",
-        "net": "ws",
-        "type": "none",
-        "host": domain,
-        "path": "/vless",
-        "tls": "tls",
-        "sni": domain,
-        "alpn": "http/1.1",
-        "fp": "chrome"
-    }
-    config_str = json.dumps(config, separators=(',', ':'))
-    encoded = base64.b64encode(config_str.encode()).decode()
-    return f"vless://{encoded}"
+    """تولید لینک VLESS استاندارد که تو همه کلاینت‌ها کار کنه"""
+    # فرمت ساده و استاندارد VLESS
+    return f"vless://{uuid_str}@{domain}:443?encryption=none&security=tls&sni={domain}&fp=chrome&type=ws&host={domain}&path=%2Fvless#{name.replace(' ', '%20')}"
 
 # لینک پیش‌فرض
 default_uuid = str(uuid.uuid4())
-default_name = "RVG-Default"
 default_link = {
     "id": "default",
-    "name": default_name,
+    "name": "Default",
     "traffic_limit_mb": None,
     "traffic_used_mb": 0,
     "is_active": True,
@@ -65,18 +49,23 @@ default_link = {
 }
 link_manager.links["default"] = default_link
 
-# ========== API ==========
+# ========== API عمومی ==========
 @app.get("/")
 async def root():
-    return RedirectResponse(url="/dashboard")
+    return RedirectResponse(url=f"/{ADMIN_PATH}")
 
 @app.get("/health")
 async def health():
     return JSONResponse({"status": "ok", "domain": PUBLIC_DOMAIN})
 
-@app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/vless")
+async def vless_endpoint():
+    return JSONResponse({"status": "ready", "message": "WebSocket endpoint"})
+
+# ========== API پنل مدیریت (مسیر رندوم) ==========
+@app.get(f"/{ADMIN_PATH}", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    default_link_url = generate_vless_link(default_uuid, PUBLIC_DOMAIN, default_name)
+    default_link_url = generate_vless_link(default_uuid, PUBLIC_DOMAIN, "Default")
     
     # ساخت QR
     qr = qrcode.QRCode(box_size=3, border=1)
@@ -87,7 +76,6 @@ async def dashboard(request: Request):
     qr_img.save(buffered, format="PNG")
     qr_base64 = base64.b64encode(buffered.getvalue()).decode()
     
-    # لیست لینک‌ها
     custom_links = []
     for link_id, link in link_manager.links.items():
         if link_id != "default":
@@ -106,12 +94,12 @@ async def dashboard(request: Request):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RVG Gateway - مدیریت کانفیگ</title>
+    <title>RVG Gateway</title>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
             min-height: 100vh;
             padding: 20px;
         }}
@@ -136,7 +124,6 @@ async def dashboard(request: Request):
             text-align: center;
             color: white;
         }}
-        .stat-card h3 {{ font-size: 14px; opacity: 0.8; margin-bottom: 10px; }}
         .stat-card .number {{ font-size: 2em; font-weight: bold; }}
         .section {{
             background: white;
@@ -145,15 +132,11 @@ async def dashboard(request: Request):
             margin-bottom: 30px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
         }}
-        .section h2 {{
-            color: #1a1a2e;
-            margin-bottom: 20px;
-            border-bottom: 2px solid #1a1a2e;
-            padding-bottom: 10px;
-        }}
+        .section h2 {{ color: #333; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }}
         .link-box {{
-            background: #f0f0f0;
-            border-radius: 10px;
+            background: #2d2d2d;
+            color: #0f0;
+            border-radius: 8px;
             padding: 15px;
             word-break: break-all;
             font-family: monospace;
@@ -161,7 +144,7 @@ async def dashboard(request: Request):
             margin-bottom: 15px;
         }}
         button {{
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            background: #302b63;
             color: white;
             border: none;
             padding: 10px 20px;
@@ -169,9 +152,7 @@ async def dashboard(request: Request):
             cursor: pointer;
             margin: 5px;
         }}
-        button:hover {{ opacity: 0.9; }}
         .btn-copy {{ background: #28a745; }}
-        .btn-delete {{ background: #dc3545; }}
         .create-form {{
             display: flex;
             gap: 10px;
@@ -189,7 +170,7 @@ async def dashboard(request: Request):
             border-radius: 10px;
             padding: 15px;
             margin-bottom: 15px;
-            border-right: 4px solid #1a1a2e;
+            border-right: 4px solid #302b63;
         }}
         .note {{
             background: #fff3cd;
@@ -197,35 +178,45 @@ async def dashboard(request: Request):
             border-radius: 10px;
             padding: 15px;
             color: #856404;
-            margin-top: 20px;
         }}
-        .qr-img {{ width: 150px; height: 150px; }}
+        .admin-path {{
+            background: #e8e8e8;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-family: monospace;
+            text-align: center;
+        }}
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🚀 RVG Gateway</h1>
-            <p>مدیریت کانفیگ‌های VLESS over WebSocket</p>
+            <p>مدیریت کانفیگ VLESS over WebSocket</p>
+        </div>
+
+        <div class="admin-path">
+            🔐 مسیر مدیریت: /{ADMIN_PATH}
         </div>
 
         <div class="stats-grid">
             <div class="stat-card">
-                <h3>📊 کل ترافیک</h3>
-                <div class="number">{sum(l.get('traffic_used_mb', 0) for l in link_manager.links.values()):.1f} MB</div>
+                <h3>📊 ترافیک کل</h3>
+                <div class="number">{sum(l.get('traffic_used_mb', 0) for l in link_manager.links.values()):.0f} MB</div>
             </div>
             <div class="stat-card">
                 <h3>🔗 تعداد لینک‌ها</h3>
                 <div class="number">{len(link_manager.links)}</div>
             </div>
             <div class="stat-card">
-                <h3>✅ لینک‌های فعال</h3>
+                <h3>✅ فعال</h3>
                 <div class="number">{sum(1 for l in link_manager.links.values() if l.get('is_active', True))}</div>
             </div>
         </div>
 
         <div class="section">
-            <h2>🔗 کانفیگ پیش‌فرض (بدون محدودیت)</h2>
+            <h2>🔗 کانفیگ پیش‌فرض</h2>
             <div class="link-box" id="defaultLink">{default_link_url}</div>
             <button class="btn-copy" onclick="copyToClipboard('defaultLink')">📋 کپی لینک</button>
             <button onclick="showQR('{qr_base64}')">📱 QR Code</button>
@@ -234,23 +225,23 @@ async def dashboard(request: Request):
         <div class="section">
             <h2>➕ ساخت کانفیگ جدید</h2>
             <div class="create-form">
-                <input type="text" id="linkName" placeholder="نام کانفیگ (مثال: دوست, همکار, موبایل)">
-                <input type="number" id="trafficLimit" placeholder="محدودیت ترافیک (MB) - اختیاری">
-                <button onclick="createLink()">ساخت کانفیگ</button>
+                <input type="text" id="linkName" placeholder="نام (مثال: دوست, همکار)">
+                <input type="number" id="trafficLimit" placeholder="محدودیت ترافیک MB (اختیاری)">
+                <button onclick="createLink()">ساخت</button>
             </div>
             
-            <h2>📋 کانفیگ‌های ساخته شده</h2>
+            <h2>📋 کانفیگ‌ها</h2>
             <div id="linksList">
                 {''.join(f'''
                 <div class="link-item">
                     <strong>{link['name']}</strong><br>
                     مصرف: {link['traffic_used_mb']} MB
                     {f' | محدودیت: {link["traffic_limit_mb"]} MB' if link['traffic_limit_mb'] else ' | نامحدود'}
-                    {' | ❌ غیرفعال' if not link['is_active'] else ' | ✅ فعال'}
+                    {' | غیرفعال' if not link['is_active'] else ' | فعال'}
                     <div class="link-box" style="font-size:10px; margin-top:10px;" id="link-{link['id']}">{link['url']}</div>
                     <button class="btn-copy" onclick="copyToClipboard('link-{link['id']}')">📋 کپی</button>
                     <button onclick="toggleLink('{link['id']}')" style="background:{'#dc3545' if link['is_active'] else '#28a745'}">
-                        {'❌ غیرفعال' if link['is_active'] else '✅ فعال'}
+                        {'غیرفعال' if link['is_active'] else 'فعال'}
                     </button>
                 </div>
                 ''' for link in custom_links)}
@@ -258,8 +249,7 @@ async def dashboard(request: Request):
         </div>
 
         <div class="note">
-            ⚠️ <strong>نکته:</strong> اطلاعات به صورت موقت ذخیره می‌شوند. با هر بار ری‌استارت سرویس، کانفیگ‌ها ریست می‌شوند.
-            <br>
+            ⚠️ اطلاعات به صورت موقت ذخیره می‌شوند. با هر بار ری‌استارت ریست می‌شوند.<br>
             🌐 دامنه: {PUBLIC_DOMAIN}
         </div>
     </div>
@@ -268,15 +258,14 @@ async def dashboard(request: Request):
         async function createLink() {{
             const name = document.getElementById('linkName').value;
             const limit = document.getElementById('trafficLimit').value;
-            if (!name) {{ alert('لطفاً نام کانفیگ را وارد کنید'); return; }}
-            
+            if (!name) {{ alert('لطفاً نام را وارد کنید'); return; }}
             const response = await fetch('/api/links', {{
                 method: 'POST',
                 headers: {{ 'Content-Type': 'application/json' }},
                 body: JSON.stringify({{ name: name, traffic_limit_mb: limit ? parseFloat(limit) : null }})
             }});
             if (response.ok) location.reload();
-            else alert('خطا در ساخت کانفیگ');
+            else alert('خطا');
         }}
         
         async function toggleLink(linkId) {{
@@ -288,13 +277,13 @@ async def dashboard(request: Request):
         function copyToClipboard(elementId) {{
             const text = document.getElementById(elementId).innerText;
             navigator.clipboard.writeText(text);
-            alert('✅ لینک کپی شد!');
+            alert('✅ کپی شد!');
         }}
         
         function showQR(qrData) {{
             const win = window.open('', '_blank', 'width=350,height=400');
             win.document.write(`
-                <html><head><title>QR Code</title></head>
+                <html><head><title>QR</title></head>
                 <body style="text-align:center;padding:20px;">
                     <h3>اسکن کنید</h3>
                     <img src="data:image/png;base64,${{qrData}}" style="width:250px;">
@@ -333,6 +322,7 @@ async def toggle_link(link_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"🚀 RVG Gateway on Render")
-    print(f"📍 Dashboard: https://{PUBLIC_DOMAIN}/dashboard")
+    print(f"🚀 RVG Gateway")
+    print(f"🔐 Admin Path: /{ADMIN_PATH}")
+    print(f"📍 Domain: {PUBLIC_DOMAIN}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
